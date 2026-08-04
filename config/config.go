@@ -133,16 +133,17 @@ func LoadConfig(configFile string) (*Config, error) {
 		return nil, err
 	}
 
+	defaultKeys := cloneKeys(DefaultKeys)
 	if conf.Keys == nil {
-		conf.Keys = DefaultKeys
+		conf.Keys = defaultKeys
 	} else {
 		// copy default keys
-		for keyCategory, keys := range DefaultKeys {
+		for keyCategory, keys := range defaultKeys {
 			confKeys, found := conf.Keys[keyCategory]
-			if found {
+			if found && confKeys != nil {
 				for key, action := range keys {
 					if _, found := confKeys[key]; !found {
-						conf.Keys[keyCategory][key] = action
+						confKeys[key] = action
 					}
 				}
 			} else {
@@ -152,6 +153,18 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 
 	return &conf, nil
+}
+
+func cloneKeys(keys map[string]map[string]string) map[string]map[string]string {
+	cloned := make(map[string]map[string]string, len(keys))
+	for category, categoryKeys := range keys {
+		clonedCategory := make(map[string]string, len(categoryKeys))
+		for key, action := range categoryKeys {
+			clonedCategory[key] = action
+		}
+		cloned[category] = clonedCategory
+	}
+	return cloned
 }
 
 func GetDefaultConfigLocation() string {
