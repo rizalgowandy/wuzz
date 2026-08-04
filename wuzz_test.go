@@ -5,10 +5,32 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestDuplicateRequestHeadersAreSent(t *testing.T) {
+	headers, err := parseRequestHeaders("X-Custom: one\nX-Custom: two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://example.test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header = headers
+	dump, err := httputil.DumpRequestOut(request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bytes.Count(dump, []byte("X-Custom: one\r\n")) != 1 || bytes.Count(dump, []byte("X-Custom: two\r\n")) != 1 {
+		t.Fatalf("request does not contain both X-Custom headers:\n%s", dump)
+	}
+}
 
 func TestBuildMultipartBody(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "payload.txt")

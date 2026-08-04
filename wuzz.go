@@ -771,22 +771,15 @@ func (a *App) SubmitRequest(g *gocui.Gui, _ *gocui.View) error {
 		r.Method = getViewValue(g, REQUEST_METHOD_VIEW)
 
 		// set headers
-		headers := http.Header{}
-		headers.Set("User-Agent", "")
 		r.Headers = getViewValue(g, REQUEST_HEADERS_VIEW)
-		for _, header := range strings.Split(r.Headers, "\n") {
-			if header != "" {
-				header_parts := strings.SplitN(header, ": ", 2)
-				if len(header_parts) != 2 {
-					g.Update(func(g *gocui.Gui) error {
-						vrb, _ := g.View(RESPONSE_BODY_VIEW)
-						fmt.Fprintf(vrb, "Invalid header: %v", header)
-						return nil
-					})
-					return nil
-				}
-				headers.Set(header_parts[0], header_parts[1])
-			}
+		headers, err := parseRequestHeaders(r.Headers)
+		if err != nil {
+			g.Update(func(g *gocui.Gui) error {
+				vrb, _ := g.View(RESPONSE_BODY_VIEW)
+				fmt.Fprint(vrb, err)
+				return nil
+			})
+			return nil
 		}
 
 		var body io.Reader
@@ -1505,6 +1498,25 @@ func (a *App) LoadConfig(configPath string) error {
 func isMultipartFormData(contentType string) bool {
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	return err == nil && mediaType == config.ContentTypes["multipart"]
+}
+
+func parseRequestHeaders(data string) (http.Header, error) {
+	headers := http.Header{}
+	for _, header := range strings.Split(data, "\n") {
+		if header == "" {
+			continue
+		}
+		headerParts := strings.SplitN(header, ": ", 2)
+		if len(headerParts) != 2 {
+			return nil, fmt.Errorf("Invalid header: %v", header)
+		}
+		headers.Add(headerParts[0], headerParts[1])
+	}
+
+	if _, found := headers["User-Agent"]; !found {
+		headers.Set("User-Agent", "")
+	}
+	return headers, nil
 }
 
 func buildMultipartBody(data string) (*bytes.Buffer, string, error) {
