@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -794,50 +795,22 @@ func (a *App) SubmitRequest(g *gocui.Gui, _ *gocui.View) error {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
 			bodyStr := getViewValue(g, REQUEST_DATA_VIEW)
 			r.Data = bodyStr
-			if headers.Get("Content-Type") != "multipart/form-data" {
+			if !isMultipartFormData(headers.Get("Content-Type")) {
 				if headers.Get("Content-Type") == "application/x-www-form-urlencoded" {
 					bodyStr = strings.Replace(bodyStr, "\n", "&", -1)
 				}
 				body = bytes.NewBufferString(bodyStr)
 			} else {
-				var bodyBytes bytes.Buffer
-				multiWriter := multipart.NewWriter(&bodyBytes)
-				defer multiWriter.Close()
-				postData, err := url.ParseQuery(strings.Replace(getViewValue(g, REQUEST_DATA_VIEW), "\n", "&", -1))
+				bodyBytes, contentType, err := buildMultipartBody(bodyStr)
 				if err != nil {
+					g.Update(func(g *gocui.Gui) error {
+						vrb, _ := g.View(RESPONSE_BODY_VIEW)
+						fmt.Fprintf(vrb, "Error: %v", err)
+						return nil
+					})
 					return err
 				}
-				for postKey, postValues := range postData {
-					for i := range postValues {
-						if len([]rune(postValues[i])) > 0 && postValues[i][0] == '@' {
-							file, err := os.Open(postValues[i][1:])
-							if err != nil {
-								g.Update(func(g *gocui.Gui) error {
-									vrb, _ := g.View(RESPONSE_BODY_VIEW)
-									fmt.Fprintf(vrb, "Error: %v", err)
-									return nil
-								})
-								return err
-							}
-							defer file.Close()
-							fw, err := multiWriter.CreateFormFile(postKey, path.Base(postValues[i][1:]))
-							if err != nil {
-								return err
-							}
-							if _, err := io.Copy(fw, file); err != nil {
-								return err
-							}
-						} else {
-							fw, err := multiWriter.CreateFormField(postKey)
-							if err != nil {
-								return err
-							}
-							if _, err := fw.Write([]byte(postValues[i])); err != nil {
-								return err
-							}
-						}
-					}
-				}
+				headers.Set("Content-Type", contentType)
 				body = bytes.NewReader(bodyBytes.Bytes())
 			}
 		}
@@ -1529,6 +1502,55 @@ func (a *App) LoadConfig(configPath string) error {
 	return nil
 }
 
+func isMultipartFormData(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mediaType == config.ContentTypes["multipart"]
+}
+
+func buildMultipartBody(data string) (*bytes.Buffer, string, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	postData, err := url.ParseQuery(strings.ReplaceAll(data, "\n", "&"))
+	if err != nil {
+		return nil, "", err
+	}
+
+	for postKey, postValues := range postData {
+		for _, postValue := range postValues {
+			if strings.HasPrefix(postValue, "@") {
+				if err := writeMultipartFile(writer, postKey, strings.TrimPrefix(postValue, "@")); err != nil {
+					return nil, "", err
+				}
+				continue
+			}
+			if err := writer.WriteField(postKey, postValue); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+
+	contentType := writer.FormDataContentType()
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body, contentType, nil
+}
+
+func writeMultipartFile(writer *multipart.Writer, fieldName, filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	fileWriter, err := writer.CreateFormFile(fieldName, path.Base(filePath))
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(fileWriter, file)
+	return err
+}
+
 func (a *App) ParseArgs(g *gocui.Gui, args []string) error {
 	a.Layout(g)
 	g.SetCurrentView(VIEWS[a.viewIndex])
@@ -1691,8 +1713,7 @@ func (a *App) ParseArgs(g *gocui.Gui, args []string) error {
 			form_str := args[arg_index]
 			content_type = "multipart"
 			set_data = true
-			vdata, _ := g.View(REQUEST_DATA_VIEW)
-			setViewTextAndCursor(vdata, form_str)
+			body_data = append(body_data, form_str)
 		case "-f", "--file":
 			if arg_index == args_len-1 {
 				return errors.New("-f or --file requires a file path be provided as an argument")
